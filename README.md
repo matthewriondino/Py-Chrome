@@ -20,11 +20,12 @@ Fast Install (MacOS)
 -------------------
 
 1. Install Python (https://www.python.org/downloads/)
-2. Right-click `installer.py` and open with Python Launcher
-3. The finished application package is created in:
+2. Download all contents and place all .py files together in a folder
+3. Right-click `installer.py` and open with Python Launcher
+4. The finished application package is created in:
    - `release/PyChromeV9`
    - plus a ZIP in `release/` (unless `--no-zip` is used)
-4. Optional: Delete all source code and use the exported application
+5. Optional: Delete all source code and use the exported application
 
 Run From Source
 -------------------
