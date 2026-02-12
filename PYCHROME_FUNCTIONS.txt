@@ -1,0 +1,747 @@
+Py-Chrome V9 Function Reference (Detailed)
+==========================================
+
+Purpose
+-------
+This document is a full function-by-function technical reference for the current Py-Chrome V9 codebase.
+It describes what each function does, what data it reads/writes, and where it is used.
+
+Conventions Used In This File
+-----------------------------
+- Image arrays are usually float32 in range [0, 1], shape HxWx3.
+- Texture arrays are RGBA float32, shape HxWx4, flattened before upload to DearPyGui.
+- "DPG" means DearPyGui (`dearpygui.dearpygui`).
+- "State" means the singleton `STATE = AppState()` in `app.py`.
+
+
+1) app.py (application orchestration and callbacks)
+---------------------------------------------------
+
+Function: `_extract_path_from_file_dialog_appdata(app_data)` (`app.py:57`)
+- Purpose: Normalizes different DearPyGui callback payload shapes into one file path string.
+- Inputs:
+  - `app_data`: may be `dict`, `list`, `tuple`, `str`, or `None`.
+- Returns:
+  - Path string when found, otherwise `None`.
+- Behavior details:
+  - Checks common dict keys (`file_path_name`, `file_path`, `file_name`).
+  - Accepts list/tuple and returns first element.
+  - Accepts raw string directly.
+- Side effects: None.
+- Called by:
+  - `open_file_callback`.
+
+Function: `update_save_format_options(path=None)` (`app.py:76`)
+- Purpose: Updates available output format options based on currently loaded input file type.
+- Inputs:
+  - `path`: current source image path.
+- Returns: `None`.
+- Behavior details:
+  - If input is TIFF, inserts TIFF option; otherwise hides TIFF option.
+  - Keeps current combo selection if still valid; otherwise selects first available option.
+  - Updates hint text explaining TIFF availability.
+- Side effects:
+  - Mutates DPG widgets `save_format` and `save_format_hint`.
+- Called by:
+  - `load_image_from_path`, `save_image`, `main`.
+
+Function: `update_warnings()` (`app.py:97`)
+- Purpose: Computes warning messages for risky slider settings.
+- Inputs: None (reads live slider values from DPG).
+- Returns: `None`.
+- Behavior details:
+  - Warns if `fracBY < 1.0` (possible highlight clipping).
+  - Warns if `exposure > 2.0` (high clipping risk).
+- Side effects:
+  - Writes combined warning text to `warning_text`.
+- Called by:
+  - `update_main_preview`.
+
+Function: `update_analysis_labels(use_converted)` (`app.py:106`)
+- Purpose: Keeps histogram/scatter labels consistent with current analysis mode.
+- Inputs:
+  - `use_converted` (`bool`): True for transformed data mode, False for source mode.
+- Returns: `None`.
+- Behavior details:
+  - Sets histogram explanatory text.
+  - Updates plot titles and axis labels for all three scatter plots.
+  - Stores active mode in `STATE.last_analysis_label_mode`.
+- Side effects:
+  - Reconfigures multiple DPG labels (`plot_rg`, `axis_rg_x`, etc.).
+- Called by:
+  - `update_main_preview`, `main`.
+
+Function: `_delete_scatter_themes()` (`app.py:143`)
+- Purpose: Safely deletes any currently bound scatter plot themes before rebuilding.
+- Inputs: None.
+- Returns: `None`.
+- Behavior details:
+  - Iterates cached theme IDs in `STATE.scatter_theme_ids`.
+  - Attempts `dpg.delete_item` for each existing theme.
+  - Resets IDs to `None` even if deletion fails.
+- Side effects:
+  - Mutates DPG theme objects and `STATE.scatter_theme_ids`.
+- Called by:
+  - `rebuild_scatter_themes`.
+
+Function: `rebuild_scatter_themes(marker_size)` (`app.py:154`)
+- Purpose: Recreates and binds colored scatter marker themes for the 3 plots.
+- Inputs:
+  - `marker_size` (`int`-like): marker radius for all scatter series.
+- Returns: `None`.
+- Behavior details:
+  - Creates three plot themes: red/orange/blue style sets for `series_rg`, `series_rb`, `series_gb`.
+  - Uses `mvPlotMarker_Circle`.
+  - Binds each theme to corresponding series tag.
+- Side effects:
+  - Creates new DPG theme objects.
+  - Updates `STATE.scatter_theme_ids`.
+- Called by:
+  - `on_marker_size_changed`, `main`.
+
+Function: `on_marker_size_changed(sender, app_data)` (`app.py:190`)
+- Purpose: Marker-size slider callback that reapplies scatter themes and refreshes analysis.
+- Inputs:
+  - `sender`: DPG sender tag (unused).
+  - `app_data`: new slider value.
+- Returns: `None`.
+- Behavior details:
+  - Parses size from callback payload, with fallback from current widget value.
+  - Calls `rebuild_scatter_themes(size)` then `update_main_preview()`.
+- Side effects:
+  - Triggers plot style recreation and full preview refresh.
+
+Function: `update_channel_previews(out)` (`app.py:199`)
+- Purpose: Updates "After Conversion" channel thumbnails from transformed image.
+- Inputs:
+  - `out`: transformed HxWx3 image (IR, Red, Green channel order in pipeline).
+- Returns: `None`.
+- Behavior details:
+  - Builds one RGB "Original" preview and three mono previews using one resize pass.
+  - Uses `original_order=(1,2,0)` so "Original" tile displays Red/Green/IR.
+  - Uses mono order `(0,1,2)` mapped to tiles IR, R, G.
+- Side effects:
+  - Writes texture buffers for `tex_Original`, `tex_IR`, `tex_R`, `tex_G`.
+- Called by:
+  - `update_main_preview`.
+
+Function: `update_histogram(src_img)` (`app.py:218`)
+- Purpose: Regenerates histogram texture from selected analysis source.
+- Inputs:
+  - `src_img`: image used for histogram (converted output or WB-adjusted source).
+- Returns: `None`.
+- Behavior details:
+  - Reads `hist_gain` from slider, guards invalid values.
+  - Calls `build_histogram_texture`.
+  - On failure, logs traceback and replaces with empty histogram texture.
+- Side effects:
+  - Writes `hist_texture` dynamic texture.
+- Called by:
+  - `update_main_preview`.
+
+Function: `update_main_preview(sender=None, app_data=None)` (`app.py:240`)
+- Purpose: Core render/update loop for preview image, channels, scatter plots, warnings, and histogram.
+- Inputs:
+  - Standard DPG callback args (not required by internal logic).
+- Returns: `None`.
+- Primary workflow:
+  - Reads mode toggle `scatter_use_converted`.
+  - Updates labels only when mode changed (guarded by `STATE.last_analysis_label_mode`).
+  - If no image loaded, clears histogram and exits.
+  - Applies white balance -> runs IRG transform -> renders texture for main preview.
+  - Updates after-channel textures and warnings.
+  - Builds sampled scatter data and updates 3 plot series.
+  - Updates histogram from selected mode source.
+- Side effects:
+  - Writes many DPG widgets (`texture`, scatter series, histogram, labels).
+  - Reads/writes `STATE.last_analysis_update_error`.
+- Called by:
+  - Most slider callbacks, mode checkbox, marker size callback, preset load, reset, image load.
+
+Function: `toggle_wb_dropper(sender=None, app_data=None)` (`app.py:281`)
+- Purpose: Enables/disables WB dropper mode.
+- Inputs: callback args (unused).
+- Returns: `None`.
+- Behavior details:
+  - Flips `STATE.wb_dropper_active`.
+  - Updates dropper button label to indicate active/inactive state.
+- Side effects:
+  - Mutates state flag and button label.
+- Called by:
+  - WB reference button callback.
+
+Function: `on_preview_image_click(sender, app_data)` (`app.py:291`)
+- Purpose: Handles click sampling for WB dropper on preview image.
+- Inputs:
+  - Callback args from global mouse click handler.
+- Returns: `None`.
+- Behavior details:
+  - Exits unless dropper is active and preview image is hovered.
+  - Converts screen click coordinates into image coordinates accounting for letterboxing and scale.
+  - Samples RGB from `STATE.preview_img`.
+  - Estimates `wb_temp`/`wb_tint` via `find_wb_from_gray_sample`.
+  - Applies values, refreshes preview, and deactivates dropper.
+- Side effects:
+  - Sets WB sliders, updates preview, changes dropper button label/state.
+- Called by:
+  - Global DPG mouse-click handler created in `main`.
+
+Function: `load_image_from_path(path)` (`app.py:336`)
+- Purpose: Loads image data from disk and initializes all preview-related UI/state.
+- Inputs:
+  - `path`: absolute/relative image file path.
+- Returns: `None` (logs and early-returns on errors).
+- Behavior details:
+  - Loads full and preview arrays via `load_image_arrays`.
+  - Stores arrays in `STATE.full_img` and `STATE.preview_img`.
+  - Resets scatter sampling cache to force new sample for new image.
+  - Updates file path field and save-format options.
+  - Builds "Before Conversion" channel textures.
+    - Original order `(0,1,2)` for source RGB.
+    - Mono channel order `(2,0,1)` to display source channel 2 as "IR", then R, G.
+  - Calls `update_main_preview`.
+- Side effects:
+  - Replaces core loaded image state and several texture widgets.
+- Called by:
+  - `open_file_callback`, `load_image`.
+
+Function: `open_file_callback(sender, app_data)` (`app.py:383`)
+- Purpose: File-dialog callback that extracts selected path and loads image.
+- Inputs:
+  - DPG callback payload from file dialog.
+- Returns: `None`.
+- Behavior details:
+  - Uses `_extract_path_from_file_dialog_appdata`.
+  - Calls `load_image_from_path` when valid.
+- Side effects:
+  - Indirect: image/state/UI updates through loader.
+
+Function: `refresh_presets_dropdown()` (`app.py:391`)
+- Purpose: Reloads preset list from disk into UI combo box.
+- Inputs: None.
+- Returns: `None`.
+- Behavior details:
+  - Reads JSON preset names from `PRESETS_DIR`.
+  - Preserves currently selected item if still valid.
+  - Clears selection when no presets exist.
+- Side effects:
+  - Mutates `preset_combo` widget contents/value.
+- Called by:
+  - Startup, save/delete flows, manual refresh button.
+
+Function: `_write_preset_file(path)` (`app.py:405`)
+- Purpose: Internal helper that serializes current slider values to one preset JSON file.
+- Inputs:
+  - `path`: output preset file path.
+- Returns:
+  - `True` on successful write, `False` on failure.
+- Behavior details:
+  - Collects values for tags listed in `PRESET_SLIDERS`.
+  - Writes JSON through `save_preset_file`.
+  - Refreshes dropdown and sets current selection to saved preset name.
+- Side effects:
+  - Disk write.
+  - UI update for preset combo.
+- Called by:
+  - `save_preset_to_folder`, `confirm_overwrite_preset`.
+
+Function: `save_preset_to_folder(name)` (`app.py:423`)
+- Purpose: Validates preset name and saves new preset, with overwrite confirmation workflow.
+- Inputs:
+  - `name`: user-entered preset name.
+- Returns:
+  - `True` if saved immediately.
+  - `False` if invalid, failed, or waiting on overwrite confirmation.
+- Behavior details:
+  - Sanitizes name via `preset_filename_from_name`.
+  - If file exists, populates overwrite modal hidden fields and shows confirmation modal.
+  - If file does not exist, writes directly with `_write_preset_file`.
+- Side effects:
+  - May show modal and set hidden UI fields.
+  - May write preset file.
+
+Function: `confirm_overwrite_preset(sender=None, app_data=None)` (`app.py:446`)
+- Purpose: Finalizes overwrite after user confirms modal.
+- Inputs: callback args (unused).
+- Returns: `None`.
+- Behavior details:
+  - Reads staged path from hidden field.
+  - Hides/clears modal state fields.
+  - Calls `_write_preset_file(path)` when path exists.
+- Side effects:
+  - UI modal reset and disk write.
+
+Function: `cancel_overwrite_preset(sender=None, app_data=None)` (`app.py:457`)
+- Purpose: Cancels overwrite flow and clears temporary modal state.
+- Inputs: callback args (unused).
+- Returns: `None`.
+- Side effects:
+  - Hides overwrite modal and clears hidden helper fields.
+
+Function: `load_preset_from_folder(name)` (`app.py:464`)
+- Purpose: Loads selected preset JSON into active sliders.
+- Inputs:
+  - `name`: preset name from combo (without extension).
+- Returns:
+  - `True` if at least one known key applied.
+  - `False` on missing file, parse/read failure, or empty/invalid content.
+- Behavior details:
+  - Reads file `PRESETS_DIR/<name>.json`.
+  - Applies keys matching `PRESET_SLIDERS`.
+  - Triggers `update_main_preview` only if at least one value changed.
+- Side effects:
+  - Sets multiple slider values and refreshes preview.
+
+Function: `delete_selected_preset(name)` (`app.py:497`)
+- Purpose: Deletes one preset file from disk and refreshes preset list.
+- Inputs:
+  - `name`: preset name (without `.json`).
+- Returns:
+  - `True` on successful deletion, else `False`.
+- Behavior details:
+  - Verifies file exists before delete attempt.
+  - Uses `delete_preset_file` and refreshes combo list.
+- Side effects:
+  - Disk delete and UI dropdown update.
+
+Function: `show_delete_preset_confirm(sender=None, app_data=None)` (`app.py:516`)
+- Purpose: Opens delete confirmation modal for currently selected preset.
+- Inputs: callback args (unused).
+- Returns: `None`.
+- Behavior details:
+  - Reads current combo selection.
+  - Stores selected preset name in hidden `preset_to_delete`.
+  - Shows delete modal.
+- Side effects:
+  - UI modal visibility change.
+
+Function: `confirm_delete_preset(sender=None, app_data=None)` (`app.py:525`)
+- Purpose: Modal confirm action for preset deletion.
+- Inputs: callback args (unused).
+- Returns: `None`.
+- Behavior details:
+  - Reads staged preset name.
+  - Calls `delete_selected_preset`.
+  - Hides modal and clears hidden field when deletion succeeds.
+- Side effects:
+  - May delete file; updates dropdown; closes modal.
+
+Function: `reset_to_defaults(sender=None, app_data=None)` (`app.py:537`)
+- Purpose: Restores all transform/WB slider values to default preset constants.
+- Inputs: callback args (unused).
+- Returns: `None`.
+- Behavior details:
+  - Iterates `DEFAULT_PRESET` map and writes each value to matching DPG control.
+  - Calls `update_main_preview` to reflect reset.
+- Side effects:
+  - Updates many controls and preview outputs.
+
+Function: `load_image(sender=None, app_data=None)` (`app.py:547`)
+- Purpose: Convenience callback that loads image using path currently in `file` control.
+- Inputs: callback args (unused).
+- Returns: `None`.
+- Called by:
+  - (Currently available helper; not primary flow since file dialog callback calls loader directly.)
+
+Function: `save_image(sender=None, app_data=None)` (`app.py:552`)
+- Purpose: Exports transformed full-resolution image with selected output format.
+- Inputs: callback args (unused).
+- Returns: `None`.
+- Workflow details:
+  - Verifies image is loaded.
+  - Reads selected format from combo and validates against `SAVE_FORMAT_SPECS`.
+  - Enforces TIFF-export gating: only allowed if source input was TIFF.
+  - Builds output path near source using suffix `_IRG` and selected extension.
+  - Runs WB + scientific transform on `STATE.full_img` (full-res, not preview).
+  - Saves through `save_output_array`.
+  - If save succeeded, asks OS file manager to reveal the output file.
+- Side effects:
+  - Disk write; may invoke `open -R` (macOS) or Explorer select (Windows).
+
+Function: `main()` (`app.py:591`)
+- Purpose: App bootstrap and event loop entrypoint.
+- Inputs: None.
+- Returns: `None`.
+- Workflow details:
+  - Creates DPG context.
+  - Builds callback map and UI (`ui.build_ui`).
+  - Creates viewport and sets up DearPyGui runtime.
+  - Registers global mouse click handler for WB dropper.
+  - Initializes presets dropdown, save-format options, scatter themes, analysis labels, histogram texture.
+  - Starts GUI loop and destroys context on exit.
+- Side effects:
+  - Creates/destroys whole GUI application runtime.
+
+
+2) processing.py (image math and analysis helpers)
+--------------------------------------------------
+
+Function: `clamp(x)` (`processing.py:10`)
+- Purpose: Saturates values to [0, 1] range.
+- Inputs:
+  - `x`: scalar or NumPy array.
+- Returns:
+  - Clipped array/scalar via `np.clip`.
+- Side effects: None.
+- Called by:
+  - `apply_white_balance`, `scientific_irg_transform`, `_normalize_image_array_to_rgb_float`.
+
+Function: `normalize_frac(a, b)` (`processing.py:14`)
+- Purpose: Normalizes a pair of fractions so their sum does not exceed 1.
+- Inputs:
+  - `a`, `b`: numeric values.
+- Returns:
+  - Tuple `(a, b)` possibly scaled down if `a+b > 1`.
+- Side effects: None.
+- Notes:
+  - Utility exists but is not currently used by active pipeline functions.
+
+Function: `_as_texture_value(rgba)` (`processing.py:22`)
+- Purpose: Converts texture array to DPG-friendly contiguous flattened float32 buffer.
+- Inputs:
+  - `rgba`: HxWx4 array-like.
+- Returns:
+  - 1D contiguous `float32` NumPy array.
+- Why it exists:
+  - Avoids slower Python list conversion for large textures.
+- Called by:
+  - `app.py` texture update functions.
+
+Function: `kelvin_to_rgb(kelvin)` (`processing.py:33`)
+- Purpose: Approximates RGB chromaticity for a given color temperature.
+- Inputs:
+  - `kelvin`: desired temperature in Kelvin.
+- Returns:
+  - `np.array([r,g,b], dtype=float32)` in [0,1].
+- Behavior details:
+  - Clamps Kelvin to [1000, 40000].
+  - Uses Tanner Helland piecewise formula.
+  - Clips and normalizes each channel from 0-255 to 0-1.
+- Called by:
+  - `apply_white_balance`, `find_wb_from_gray_sample`.
+
+Function: `apply_white_balance(img, temp_kelvin, tint_value)` (`processing.py:60`)
+- Purpose: Applies temperature + tint compensation gains to RGB image.
+- Inputs:
+  - `img`: HxWx3 float image in [0,1].
+  - `temp_kelvin`: WB temperature slider value.
+  - `tint_value`: tint slider value (-100..100 expected).
+- Returns:
+  - WB-adjusted image in [0,1], same shape.
+  - Returns `None` if `img is None`.
+- Behavior details:
+  - Computes gain from neutral 6500K reference to selected temperature.
+  - Applies tint by scaling green gain (`1 - 0.15*tint_norm`).
+  - Multiplies per-channel gains and clamps result.
+- Side effects: None (pure transform).
+
+Function: `find_wb_from_gray_sample(rgb_sample)` (`processing.py:82`)
+- Purpose: Estimates WB temperature and tint from a pixel assumed to be neutral gray.
+- Inputs:
+  - `rgb_sample`: length-3 sample from image, typically float in [0,1].
+- Returns:
+  - Tuple `(best_temp, tint_value)` where temp is integer Kelvin and tint is int [-100,100].
+- Behavior details:
+  - Computes desired gains to equalize sample channels around their average.
+  - Performs coarse then fine temperature search minimizing RGB distance.
+  - Solves residual green adjustment into tint axis.
+- Side effects: None.
+- Called by:
+  - `on_preview_image_click`.
+
+Function: `render_into_texture(img, tex_w, tex_h, mono=False)` (`processing.py:120`)
+- Purpose: Aspect-preserving conversion of image to centered RGBA canvas for DPG display.
+- Inputs:
+  - `img`: HxWx3 or HxW image.
+  - `tex_w`, `tex_h`: target texture dimensions.
+  - `mono`: currently unused parameter (kept for compatibility).
+- Returns:
+  - `tex_h x tex_w x 4` RGBA float32 canvas with alpha 1 inside drawn image.
+- Behavior details:
+  - Resizes with Pillow LANCZOS when needed.
+  - Pads with black outside active region.
+- Side effects: None.
+
+Function: `_resize_rgb_for_canvas(src_rgb, tex_w, tex_h)` (`processing.py:146`)
+- Purpose: Shared helper for one-pass resize/placement metadata.
+- Inputs:
+  - `src_rgb`: RGB source image.
+  - `tex_w`, `tex_h`: target canvas size.
+- Returns:
+  - `(resized, x0, y0, target_w, target_h)`.
+- Why it exists:
+  - Prevents repeated resizes when building multiple related textures.
+- Side effects: None.
+
+Function: `_build_channel_texture_pack(src_rgb, tex_w, tex_h, original_order=(0,1,2), mono_channel_order=(0,1,2))` (`processing.py:162`)
+- Purpose: Builds one RGB preview plus three monochrome channel previews using one resize path.
+- Inputs:
+  - `src_rgb`: source RGB float image.
+  - `tex_w`, `tex_h`: texture sizes.
+  - `original_order`: channel permutation for RGB preview tile.
+  - `mono_channel_order`: channel indexes for the three mono tiles.
+- Returns:
+  - `(tex_original, mono_textures)` where `mono_textures` is list of 3 RGBA textures.
+- Side effects: None.
+- Called by:
+  - `update_channel_previews`, `load_image_from_path`.
+
+Function: `scientific_irg_transform(img)` (`processing.py:193`)
+- Purpose: Core IRG transform equation using UI parameters.
+- Inputs:
+  - `img`: WB-adjusted image HxWx3 float in [0,1].
+- Returns:
+  - Transformed HxWx3 float image in [0,1], channel order `[IR, Red, Green]`.
+- Behavior details:
+  - Reads all fraction/gamma/exposure sliders from DPG.
+  - Computes `Y`, `X1`, `X2` with epsilon guards and clipping.
+  - Applies exposure multiplier and final clamp.
+- Side effects:
+  - Reads DPG widget values directly.
+- Critical note:
+  - This is the algorithm the user requested to keep strictly unchanged.
+
+Function: `_hist_counts_bincount(values, bins)` (`processing.py:225`)
+- Purpose: Fast histogram bin counting for normalized channel values.
+- Inputs:
+  - `values`: channel vector.
+  - `bins`: number of bins.
+- Returns:
+  - Integer counts array of length `bins`.
+- Behavior details:
+  - Clips values to [0,1], maps to integer bin indices, uses `np.bincount`.
+- Side effects: None.
+- Called by:
+  - `build_histogram_texture`.
+
+Function: `build_histogram_texture(src_img, gain, bins=256, height=120)` (`processing.py:236`)
+- Purpose: Converts per-channel distributions into an RGBA bar-image texture.
+- Inputs:
+  - `src_img`: HxWx3 image or `None`.
+  - `gain`: visual gain multiplier (display scaling only).
+  - `bins`: histogram width in bins/pixels.
+  - `height`: histogram texture height.
+- Returns:
+  - `height x bins x 4` float texture.
+- Behavior details:
+  - Handles invalid/no data by returning zero texture.
+  - Uses fixed normalization `counts / total_pixels`.
+  - Draws bars vectorized for each channel.
+  - Guarantees at least one visible pixel for non-zero bins.
+  - Sets alpha as max RGB per pixel.
+- Side effects:
+  - Logs traceback on internal errors, but always returns safe texture.
+
+Function: `scatter_pairs_from_sample(sample, use_converted)` (`processing.py:313`)
+- Purpose: Produces x/y arrays for all three scatter plots in fixed display order.
+- Inputs:
+  - `sample`: Nx3 sampled pixels.
+  - `use_converted`: if True use transformed channel pairing; else source pairing.
+- Returns:
+  - `(x1,y1,x2,y2,x3,y3)` vectors for plots:
+    - Plot 1: Red vs IR
+    - Plot 2: Green vs IR
+    - Plot 3: Red vs Green
+- Side effects: None.
+- Called by:
+  - `update_main_preview`.
+
+Function: `sample_scatter_points(flat, state, max_scatter_points)` (`processing.py:331`)
+- Purpose: Caps scatter point count while keeping sample stable across repeated slider updates.
+- Inputs:
+  - `flat`: Nx3 flattened image array.
+  - `state`: `AppState` instance containing cache and RNG.
+  - `max_scatter_points`: maximum sample size.
+- Returns:
+  - If `N <= cap`, returns original `flat`.
+  - Else returns cached random subset.
+- Behavior details:
+  - Recomputes random index cache only when image size or cap changes.
+- Side effects:
+  - Updates `state.scatter_cache_idx`, `state.scatter_cache_n`, `state.scatter_cache_cap`.
+
+
+3) io_ops.py (file I/O and format logic)
+----------------------------------------
+
+Function: `is_tiff_path(path)` (`io_ops.py:17`)
+- Purpose: Detects TIFF extensions for input/output gating logic.
+- Inputs:
+  - `path`: file path string or None.
+- Returns:
+  - `True` for `.tif`/`.tiff`, else `False`.
+- Side effects: None.
+- Called by:
+  - `save_format_items_for_input`, `update_save_format_options`, `save_image`.
+
+Function: `save_format_items_for_input(path, save_format_jpeg, save_format_png, save_format_bmp, save_format_tiff)` (`io_ops.py:22`)
+- Purpose: Builds save-format dropdown list based on currently loaded file type.
+- Inputs:
+  - `path`: current source path.
+  - Format label strings.
+- Returns:
+  - List of UI labels; TIFF is prepended only for TIFF inputs.
+- Side effects: None.
+
+Function: `_normalize_image_array_to_rgb_float(image_array)` (`io_ops.py:29`)
+- Purpose: Converts raw loaded arrays into robust RGB float format for pipeline use.
+- Inputs:
+  - `image_array`: array from tifffile/Pillow.
+- Returns:
+  - HxWx3 float32 array clipped to [0,1].
+- Behavior details:
+  - Handles channel-first TIFF stacks by moving axis.
+  - Promotes grayscale/single-channel arrays to RGB.
+  - Drops alpha/extra channels beyond first 3.
+  - Normalizes integer types by dtype max.
+  - Normalizes float arrays by inferred range (0-1, 0-255, 0-65535, or min/max fallback).
+  - Replaces NaN/Inf with safe values.
+- Side effects:
+  - Logs when unusual float range requires min/max normalization.
+
+Function: `_load_raw_image_array(path)` (`io_ops.py:86`)
+- Purpose: Loads raw pixel data from disk with best available precision.
+- Inputs:
+  - `path`: image file path.
+- Returns:
+  - NumPy array representing raw image data.
+- Behavior details:
+  - For TIFF with `tifffile` available, uses `tifffile.imread`.
+  - Falls back to Pillow for all other cases or tifffile failure.
+  - For Pillow, preserves several modes and converts unknown modes to RGB.
+- Side effects:
+  - Prints diagnostic log lines about load path/fallback.
+
+Function: `load_image_arrays(path, max_preview_w, max_preview_h)` (`io_ops.py:105`)
+- Purpose: Produces full-resolution and preview-resolution normalized images.
+- Inputs:
+  - `path`: source image path.
+  - `max_preview_w`, `max_preview_h`: preview bounds.
+- Returns:
+  - Tuple `(full_img, preview_img)`, both float32 RGB in [0,1].
+- Behavior details:
+  - Validates path and existence.
+  - Loads raw data -> normalizes to float RGB.
+  - Resizes preview only if source exceeds preview bounds.
+- Side effects: None.
+- Called by:
+  - `load_image_from_path`.
+
+Function: `save_output_array(out, out_path, format_label)` (`io_ops.py:128`)
+- Purpose: Saves transformed image to chosen format, including TIFF precision path.
+- Inputs:
+  - `out`: transformed float image [0,1].
+  - `out_path`: output file path.
+  - `format_label`: one of configured UI save formats.
+- Returns:
+  - `True` on successful save, else `False`.
+- Behavior details:
+  - TIFF mode:
+    - Prefers 16-bit TIFF via `tifffile`.
+    - Falls back to 8-bit TIFF via Pillow if needed.
+  - Non-TIFF mode:
+    - Converts to 8-bit and saves JPEG/PNG/BMP (JPEG quality=95).
+    - PNG/BMP selection inferred from output extension.
+- Side effects:
+  - Writes file to disk.
+  - Prints save/failure diagnostics.
+
+
+4) presets.py (preset file helpers)
+-----------------------------------
+
+Function: `preset_filename_from_name(name, presets_dir)` (`presets.py:5`)
+- Purpose: Sanitizes user name into safe JSON filename under presets folder.
+- Inputs:
+  - `name`: user-entered preset title.
+  - `presets_dir`: base presets directory.
+- Returns:
+  - Full path `presets_dir/<safe>.json`.
+- Behavior details:
+  - Keeps alnum, dash, underscore, dot, and space.
+  - Trims ends.
+  - Raises `ValueError` when sanitized name is empty.
+- Side effects: None.
+
+Function: `list_presets_on_disk(presets_dir)` (`presets.py:12`)
+- Purpose: Lists preset names currently stored on disk.
+- Inputs:
+  - `presets_dir`: folder path.
+- Returns:
+  - Sorted list of preset names without `.json`.
+- Behavior details:
+  - Ignores non-JSON files.
+  - Swallows filesystem errors and returns best-effort list.
+- Side effects: None.
+
+Function: `save_preset_file(path, data)` (`presets.py:23`)
+- Purpose: Writes preset JSON to disk.
+- Inputs:
+  - `path`: destination file.
+  - `data`: serializable dictionary of slider values.
+- Returns: `None`.
+- Behavior details:
+  - Uses UTF-8 and pretty formatting (`indent=2`).
+- Side effects:
+  - File write.
+
+Function: `load_preset_file(path)` (`presets.py:28`)
+- Purpose: Reads preset JSON from disk.
+- Inputs:
+  - `path`: preset file path.
+- Returns:
+  - Parsed Python object (expected dict).
+- Side effects:
+  - File read.
+
+Function: `delete_preset_file(path)` (`presets.py:33`)
+- Purpose: Removes a preset file.
+- Inputs:
+  - `path`: target preset file.
+- Returns: `None`.
+- Side effects:
+  - File delete (`os.remove`).
+
+
+5) ui.py (UI construction)
+--------------------------
+
+Function: `build_ui(callbacks)` (`ui.py:19`)
+- Purpose: Constructs all DearPyGui textures, widgets, windows, plots, dialogs, and modals.
+- Inputs:
+  - `callbacks`: dict of function references from `app.py`.
+- Returns: `None`.
+- What it creates:
+  - Dynamic textures for main preview, before/after channel previews, and histogram.
+  - Left control panel: file open/save, format combo, presets, WB controls, fractions, gamma/exposure, scatter controls.
+  - Scatter plots in fixed order:
+    - Red vs IR
+    - Green vs IR
+    - Red vs Green
+  - Right preview panel with before/after channel image blocks.
+  - File dialog and two modals (delete confirm, overwrite confirm).
+- Side effects:
+  - Registers all DPG item tags used by the rest of the app.
+- Critical integration role:
+  - If a tag here changes, callback logic in `app.py` that references the tag must be updated too.
+
+
+6) Launcher Script
+------------------
+
+File: `Py-Chrome V9_8.py`
+- This compatibility launcher has no local function definitions.
+- It imports `main` from `app.py` and calls it when run as script.
+- Purpose: preserves prior entrypoint filename while core code now lives in modules.
+
+
+Function Coverage Checklist
+---------------------------
+This reference covers all current function definitions in:
+- `app.py` (27)
+- `processing.py` (14)
+- `io_ops.py` (6)
+- `presets.py` (5)
+- `ui.py` (1)
+
+Total documented: 53 functions.
