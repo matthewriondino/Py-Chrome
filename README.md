@@ -16,14 +16,24 @@ This project is now modular:
 - state.py: shared constants and app state
 - Py-Chrome V9_8.py: compatibility launcher that calls app.main()
 
-Install From Source
+Fast Install (MacOS)
+-------------------
+
+1. Install Python (https://www.python.org/downloads/)
+2. Right-click `installer.py` and open with Python Launcher
+3. The finished application package is created in:
+   - `release/PyChromeV9`
+   - plus a ZIP in `release/` (unless `--no-zip` is used)
+4. Optional: Delete all source code and use the exported application
+
+Run From Source
 -------------------
 
 1. Upgrade pip:
    python3 -m pip install --upgrade pip
 
 2. Install required packages:
-   python3 -m pip install numpy pillow dearpygui tifffile
+   pip install numpy pillow dearpygui tifffile
 
 3. Run the app:
    app.py
