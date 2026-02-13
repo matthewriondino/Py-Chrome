@@ -4,9 +4,11 @@ Py-Chrome V9
 
 Overview
 --------
-Py-Chrome V9 is a desktop tool for IR-style photo conversion and analysis made to emulate CIR, formally known as Aerochrome.
+Py-Chrome V9 is a desktop tool for IR photo conversion and analysis made to emulate CIR, formally known as Aerochrome.
 It provides a live preview pipeline, white-balance tools, scatter/histogram diagnostics,
 preset management, and export options from a DearPyGui interface.
+
+A Full Spectrum Camera with a Yellow 12 at the least is required to use this program
 
 This project is now modular:
 - app.py: application entrypoint and callbacks
