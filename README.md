@@ -1,5 +1,6 @@
 Py-Chrome V9
 ============
+![py-chrome-version-9-available-v0-re1k9c2qf1jg1](https://github.com/user-attachments/assets/302d0313-5478-4b25-bed2-9d1d6c8c9727)
 
 Overview
 --------
@@ -88,48 +89,101 @@ Features: What They Do and Why
 
 3. White Balance dropper + sliders
    What: click a neutral area to estimate WB temperature/tint, or adjust manually.
-   Why: IR conversions are highly WB-sensitive; this speeds accurate color setup.
+   Why: IR conversions are highly WB-sensitive; this speeds accurate color setup. The WB affects the image BEFORE conversion
 
 4. Fraction controls (Red/Green visible fractions and IR fraction)
    What: tunes channel contribution to the scientific IRG transform.
-   Why: gives control over channel separation and highlight behavior.
+   Why: gives control over channel separation and highlight behavior. The smaller the fraction of visible light, the greater the subtraction and saturation
 
-5. Gamma and exposure controls
-   What: adjust per-channel gamma response and global exposure.
+   Example of no subtraction
+   <img width="1461" height="1071" alt="Screenshot 2026-02-13 at 8 34 18 PM" src="https://github.com/user-attachments/assets/2e8d8c90-3874-4235-9338-4b0d2a808e8f" />
+
+   Example of high subtraction
+   <img width="1461" height="1071" alt="Screenshot 2026-02-13 at 8 35 28 PM" src="https://github.com/user-attachments/assets/04ff77fa-2f0a-42db-9f81-caa3c4a25b78" />
+
+   Note: Low Visible Channel fraction can cause artifacting in highlights
+
+6. Gamma and exposure controls
+   What: adjust per-channel gamma response and global exposure. Higher Gamma = Decrease in brightness &           Vice Versa
    Why: provides tonal shaping and dynamic-range balancing in output.
 
-6. Scientific IRG transform
+      - Gamma Red/Green Visible
+         What it does: Affects overall brightness of that specific channel globally
+         
+      - Gamma Red/Green IR
+         What it does: Affects brightness of channel in areas where subtraction takes place (e.g foilage)
+         
+   Example 1: To get crimson red foilage, increase Gamma Red and Green IR to decrease brightness in foilage area. Adjust Gamma Visible slightly if needed to re-balance overall color
+         <img width="1461" height="1041" alt="Screenshot 2026-02-13 at 8 13 08 PM" src="https://github.com/user-attachments/assets/bde572f1-0cb3-497a-8465-0e3c87c2979e" />
+
+   Example 2: To extract color variation from foilage, increase Gamma in Red and Green IR while decreasing Gamma in the Red and Green Visible
+<img width="1461" height="1041" alt="Screenshot 2026-02-13 at 8 29 24 PM" src="https://github.com/user-attachments/assets/5111ee76-6351-4971-b374-5de4c868dd7b" />
+
+
+      - Gamma IR
+         What it does: Affects IR channel brightness; Red and Green channel compensated automatically
+         Example: Increasing Gamma IR decreases IR channel brightness while increasing both Red and                        Green channel equally - useful for minor refinement
+
+7. Scientific IRG transform
    What: converts preview/full image using the IRG model equation.
    Why: core algorithm for the Aerochrome-style conversion workflow.
 
-7. Main preview + before/after channel tiles
+   Simplified Equation Example:
+   
+   [R] = [R + IR] - [IR]
+   
+   [G] = [G + IR] - [IR]
+
+   Note: Because we do not exactly know how much IR contaminates the Red and Green channel, it is best to treat this as visual aesthetic per scene rather than attempting to be "Correct"
+
+9. Main preview + before/after channel tiles
    What: shows transformed preview plus channel-level mini-previews.
    Why: makes it easier to debug channel behavior and tune settings quickly.
 
-8. Histogram with visual gain
+10. Histogram with visual gain
    What: displays per-channel frequency with adjustable visual gain.
    Why: helps detect clipping/distribution issues while keeping normalization stable.
 
-9. Scatter plots (before/after mode)
+11. Scatter plots (before/after mode)
    What: plots channel relationships in fixed order with optional converted/source mode.
    Why: gives quick diagnostics for channel separation and transform response.
 
-10. Presets (save/load/delete/overwrite confirmation)
+12. Presets (save/load/delete/overwrite confirmation)
     What: stores slider states to JSON in presets folder; confirms overwrite.
     Why: enables repeatable looks and safer preset management.
 
-11. Reset to default
+13. Reset to default
     What: restores all tuned parameters to known defaults.
     Why: allows quick recovery from extreme settings during experimentation.
 
-12. Performance optimizations
+14. Performance optimizations
     What: numpy texture uploads, cached scatter sampling, vectorized histogram fill,
           single-pass channel preview resize, label-update guard.
     Why: keeps UI interaction responsive during frequent slider updates.
-
+    
+Typical Workflow (Recommended)
+------------------------------
+Use this sequence for effective and consistent results:
+1. Open one representative image from your session.
+2. Set WB using "Set WB Reference" and click a neutral area.
+3. Fine-tune WB sliders manually if needed.
+4. Tune fraction sliders (`fracRx`, `fracGx`, `fracBY`) first.
+5. Tune gamma sliders second for tonal shaping.
+6. Tune exposure last.
+7. Watch histogram for clipping patterns.
+8. Check scatter plots for channel separation behavior.
+9. Save preset with a session-specific name.
+10. (If starting a new session again after close) Load next image and apply same preset.
+11. Adjust only WB/exposure per image if capture conditions drifted.
+12. Export to final format.
 
 Troubleshooting
 ---------------
+Issue: The Open File box does not appear
+- Cause:
+  The Open File is behind the main interface
+- Action: Top left of the window, next to Py-Chrome text, click on window to minimize main window to see open file box or other dialogue
+
 Issue: TIFF export not available.
 - Cause:
   Source file is not TIFF, or save option not applicable.
@@ -159,6 +213,15 @@ Issue: Preset missing from dropdown.
   file removed/renamed or invalid path state.
 - Action:
   Press Refresh; verify file exists in `presets` folder.
+
+Photo Examples
+-------------
+Additional editing done in Lightroom
+
+![r05jqjyab7hg1](https://github.com/user-attachments/assets/033a1ad5-1cca-4c9c-b24a-8b6b7b55f7e7)
+![after-before-reference-faithful-recreation-v0-2gkqm8nyb7hg1](https://github.com/user-attachments/assets/bda34fc6-02a1-49d7-8807-68ff58c124ef)
+![winding-road-aerochrome-emulation-v0-rubf56zrlkhg1](https://github.com/user-attachments/assets/adb76a3f-d87b-4ce9-9f93-a72e283570b5)
+![cir-symmetry-v0-mh69rd4e8tig1](https://github.com/user-attachments/assets/441dd903-545f-4458-a600-7d010f852351)
 
 
 License / Use
